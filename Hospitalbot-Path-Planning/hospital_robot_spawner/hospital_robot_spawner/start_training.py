@@ -1,0 +1,352 @@
+import rclpy
+from rclpy.node import Node
+from gymnasium.envs.registration import register
+from hospital_robot_spawner.hospitalbot_env import HospitalBotEnv
+from hospital_robot_spawner.hospitalbot_simplified_env import HospitalBotSimpleEnv
+import gymnasium as gym
+from stable_baselines3 import PPO
+from stable_baselines3 import A2C
+from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
+import os
+import optuna
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+
+class TrainingNode(Node):
+
+    def __init__(self):
+        super().__init__("hospitalbot_training", allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
+        self._training_mode = "training"
+
+
+def main(args=None):
+    rclpy.init()
+    node = TrainingNode()
+    node.get_logger().info("Training node has been created")
+
+    home_dir = os.path.expanduser('~')
+    pkg_dir = 'ros2_ws/src/Hospitalbot-Path-Planning/hospital_robot_spawner'
+    trained_models_dir = os.path.join(home_dir, pkg_dir, 'rl_models')
+    log_dir = os.path.join(home_dir, pkg_dir, 'logs_latest_A2C1')
+    
+    if not os.path.exists(trained_models_dir):
+        os.makedirs(trained_models_dir)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    register(
+        id="HospitalBotEnv-v0",
+        entry_point="hospital_robot_spawner.hospitalbot_env:HospitalBotEnv",
+        max_episode_steps=300,
+    )
+
+    node.get_logger().info("The environment has been registered")
+
+    env = gym.make('HospitalBotEnv-v0')
+    env = Monitor(env)
+
+    check_env(env)
+    node.get_logger().info("Environment check finished")
+
+    stop_callback = StopTrainingOnRewardThreshold(reward_threshold=900, verbose=1)
+    eval_callback = EvalCallback(env, callback_on_new_best=stop_callback, eval_freq=100000, best_model_save_path=trained_models_dir, n_eval_episodes=40)
+    
+    if node._training_mode == "random_agent":
+        episodes = 10
+        node.get_logger().info("Starting the RANDOM AGENT now")
+        for ep in range(episodes):
+            obs = env.reset()
+            done = False
+            while not done:
+                obs, reward, done, truncated, info = env.step(env.action_space.sample())
+                node.get_logger().info("Agent state: [" + str(info["distance"]) + ", " + str(info["angle"]) + "]")
+                node.get_logger().info("Reward at step " + ": " + str(reward))
+    
+    elif node._training_mode == "training":
+        model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=20480, gamma=0.9880614935504514, gae_lambda=0.9435887928788405, ent_coef=0.00009689939917928778, vf_coef=0.6330533453055319, learning_rate=0.00001177011863371444)
+        try:
+            model.learn(total_timesteps=int(40000000), reset_num_timesteps=False, callback=eval_callback, tb_log_name="A2C_m2_r7")
+        except KeyboardInterrupt:
+            model.save(f"{trained_models_dir}/A2C_MP21")
+        model.save(f"{trained_models_dir}/A2C_MP21")
+    
+    elif node._training_mode == "retraining":
+        node.get_logger().info("Retraining an existent model")
+        trained_model_path = os.path.join(home_dir, pkg_dir, 'rl_models', 'PPO_risk_seeker.zip')
+        custom_obj = {'action_space': env.action_space, 'observation_space': env.observation_space}
+        model = A2C.load(trained_model_path, env=env, custom_objects=custom_obj)
+        
+        try:
+            model.learn(total_timesteps=int(20000000), reset_num_timesteps=False, callback=eval_callback, tb_log_name="A2C_risk_seeker")
+        except KeyboardInterrupt:
+            model.save(f"{trained_models_dir}/A2C_risk_seeker_21")
+        model.save(f"{trained_models_dir}/A2C_risk_seeker_21")
+
+    elif node._training_mode == "hyperparam_tuning":
+        env.close()
+        del env
+        study = optuna.create_study(direction='maximize')
+        study.optimize(optimize_agent, n_trials=10, n_jobs=1)
+        node.get_logger().info("Best Hyperparameters: " + str(study.best_params))
+
+    node.get_logger().info("The training is finished, now the node is destroyed")
+    node.destroy_node()
+    rclpy.shutdown()
+
+def optimize_ppo(trial):
+    return {
+        'n_steps': trial.suggest_int('n_steps', 2048, 8192),
+        'gamma': trial.suggest_loguniform('gamma', 0.8, 0.9999),
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-6, 1e-3),
+        'clip_range': trial.suggest_uniform('clip_range', 0.1, 0.4),
+        'gae_lambda': trial.suggest_uniform('gae_lambda', 0.8, 0.99),
+        'ent_coef': trial.suggest_loguniform('ent_coef', 0.00000001, 0.1),
+        'vf_coef': trial.suggest_uniform('vf_coef', 0, 1),
+    }
+
+def optimize_ppo_refinement(trial):
+    return {
+        'n_steps': trial.suggest_int('n_steps', 2048, 14336),
+        'gamma': trial.suggest_loguniform('gamma', 0.96, 0.9999),
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 9e-4),
+        'clip_range': trial.suggest_uniform('clip_range', 0.15, 0.37),
+        'gae_lambda': trial.suggest_uniform('gae_lambda', 0.94, 0.99),
+        'ent_coef': trial.suggest_loguniform('ent_coef', 0.00000001, 0.00001),
+        'vf_coef': trial.suggest_uniform('vf_coef', 0.55, 0.65),
+    }
+
+def optimize_agent(trial):
+    try:
+        env_opt = gym.make('HospitalBotEnv-v0')
+        HOME_DIR = os.path.expanduser('~')
+        PKG_DIR = 'ros2_ws/src/Hospitalbot-Path-Planning/hospital_robot_spawner'
+        LOG_DIR = os.path.join(HOME_DIR, PKG_DIR, 'logs')
+        SAVE_PATH = os.path.join(HOME_DIR, PKG_DIR, 'tuning', 'trial_{}'.format(trial.number))
+        model_params = optimize_ppo_refinement(trial)
+        model = A2C("MultiInputPolicy", env_opt, tensorboard_log=LOG_DIR, verbose=0, **model_params)
+        model.learn(total_timesteps=150000)
+        mean_reward, _ = evaluate_policy(model, env_opt, n_eval_episodes=20)
+        env_opt.close()
+        del env_opt
+        model.save(SAVE_PATH)
+        return mean_reward
+
+    except Exception as e:
+        return -10000
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+# import rclpy
+# from rclpy.node import Node
+# from gymnasium.envs.registration import register
+# from hospital_robot_spawner.hospitalbot_env import HospitalBotEnv
+# from hospital_robot_spawner.hospitalbot_simplified_env import HospitalBotSimpleEnv
+# import gymnasium as gym
+# from stable_baselines3 import PPO
+# from stable_baselines3 import A2C
+# from stable_baselines3.common.env_checker import check_env
+# from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
+# import os
+# import optuna
+# from stable_baselines3.common.evaluation import evaluate_policy
+# from stable_baselines3.common.monitor import Monitor
+# # device = 
+# # import wandb
+
+# # wandb.init(
+# #     # set the wandb project where this run will be logged
+# #     project="RL-project-4",
+    
+# #     # track hyperparameters and run metadata
+# #     config={
+# #     'n_steps'=12510,
+# #     'gamma'=0.9881271366832688,
+# #     'gae_lambda'=0.9893010735077914,
+# #     'ent_coef'=1.0534503098843712e-06,
+# #     'vf_coef'=0.6182275949540633, 
+# #     'learning_rate'=0.00001177011863371444
+# #     }
+# # )
+
+# class TrainingNode(Node):
+
+#     def __init__(self):
+#         super().__init__("hospitalbot_training", allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
+
+
+#         self._training_mode = "training"
+
+
+# def main(args=None):
+
+#     # Initialize the training node to get the desired parameters
+#     rclpy.init()
+#     node = TrainingNode()
+#     node.get_logger().info("Training node has been created")
+
+#     # Create the dir where the trained RL models will be saved
+#     home_dir = os.path.expanduser('~')
+#     pkg_dir = 'ros2_ws/src/Hospitalbot-Path-Planning/hospital_robot_spawner'
+#     trained_models_dir = os.path.join(home_dir, pkg_dir, 'rl_models')
+#     log_dir = os.path.join(home_dir, pkg_dir, 'logs_latest_A2C1')
+    
+#     # If the directories do not exist we create them
+#     if not os.path.exists(trained_models_dir):
+#         os.makedirs(trained_models_dir)
+#     if not os.path.exists(log_dir):
+#         os.makedirs(log_dir)
+
+#     # First we register the gym environment created in hospitalbot_env module
+#     register(
+#         id="HospitalBotEnv-v0",
+#         entry_point="hospital_robot_spawner.hospitalbot_env:HospitalBotEnv",
+#         #entry_point="hospital_robot_spawner.hospitalbot_simplified_env:HospitalBotSimpleEnv",
+#         max_episode_steps=300,
+#     )
+
+#     node.get_logger().info("The environment has been registered")
+
+#     #env = NormalizeReward(gym.make('HospitalBotEnv-v0'))
+#     env = gym.make('HospitalBotEnv-v0')
+#     env = Monitor(env)
+
+#     # Sample Observation and Action space for Debugging
+#     #node.get_logger().info("Observ sample: " + str(env.observation_space.sample()))
+#     #node.get_logger().info("Action sample: " + str(env.action_space.sample()))
+
+#     # Here we check if the custom gym environment is fine
+#     check_env(env)
+#     node.get_logger().info("Environment check finished")
+
+#     # Now we create two callbacks which will be executed during training
+#     stop_callback = StopTrainingOnRewardThreshold(reward_threshold=900, verbose=1)
+#     eval_callback = EvalCallback(env, callback_on_new_best=stop_callback, eval_freq=100000, best_model_save_path=trained_models_dir, n_eval_episodes=40)
+    
+#     if node._training_mode == "random_agent":
+#         # N° Episodes
+#         episodes = 10
+#         ## Execute a random agent
+#         node.get_logger().info("Starting the RANDOM AGENT now")
+#         for ep in range(episodes):
+#             obs = env.reset()
+#             done = False
+#             while not done:
+#                 obs, reward, done, truncated, info = env.step(env.action_space.sample())
+#                 node.get_logger().info("Agent state: [" + str(info["distance"]) + ", " + str(info["angle"]) + "]")
+#                 node.get_logger().info("Reward at step " + ": " + str(reward))
+    
+#     elif node._training_mode == "training":
+#         ## Train the model 
+#         #model = PPO("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=2279, gamma=0.9880614935504514, gae_lambda=0.9435887928788405, ent_coef=0.00009689939917928778, vf_coef=0.6330533453055319, learning_rate=0.00011770118633714448, clip_range=0.1482)
+#         # model = PPO("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=20480, gamma=0.9880614935504514, gae_lambda=0.9435887928788405, ent_coef=0.00009689939917928778, vf_coef=0.6330533453055319, learning_rate=0.00001177011863371444, clip_range=0.1482)
+#         # model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=12510, gamma=0.9881271366832688, gae_lambda=0.9893010735077914, ent_coef=1.0534503098843712e-06, vf_coef=0.6182275949540633, learning_rate=0.00001177011863371444)
+#         model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=20480, gamma=0.9880614935504514, gae_lambda=0.9435887928788405, ent_coef=0.00009689939917928778, vf_coef=0.6330533453055319, learning_rate=0.00001177011863371444)
+#         # Execute training
+#         try:
+#             model.learn(total_timesteps=int(40000000), reset_num_timesteps=False, callback=eval_callback, tb_log_name="A2C_m2_r7")
+#         except KeyboardInterrupt:
+#             model.save(f"{trained_models_dir}/A2C_MP21")
+#         # Save the trained model
+#         model.save(f"{trained_models_dir}/A2C_MP21")
+    
+#     elif node._training_mode == "retraining":
+#         ## Re-train an existent model
+#         node.get_logger().info("Retraining an existent model")
+#         # Path in which we find the model
+#         trained_model_path = os.path.join(home_dir, pkg_dir, 'rl_models', 'PPO_risk_seeker.zip')
+#         # Here we load the rained model
+#         custom_obj = {'action_space': env.action_space, 'observation_space': env.observation_space}
+#         # model = PPO.load(trained_model_path, env=env, custom_objects=custom_obj)
+#         model = A2C.load(trained_model_path, env=env, custom_objects=custom_obj)
+        
+#         # Execute training
+#         try:
+#             model.learn(total_timesteps=int(20000000), reset_num_timesteps=False, callback=eval_callback, tb_log_name="A2C_risk_seeker")
+#         except KeyboardInterrupt:
+#             # If you notice that the training is sufficiently well interrupt to save
+#             model.save(f"{trained_models_dir}/A2C_risk_seeker_21")
+#         # Save the trained model
+#         model.save(f"{trained_models_dir}/A2C_risk_seeker_21")
+
+#     elif node._training_mode == "hyperparam_tuning":
+#         # Delete previously created environment
+#         env.close()
+#         del env
+#         # Hyperparameter tuning using Optuna
+#         study = optuna.create_study(direction='maximize')
+#         study.optimize(optimize_agent, n_trials=10, n_jobs=1)
+#         # Print best params
+#         node.get_logger().info("Best Hyperparameters: " + str(study.best_params))
+
+#     # Shutting down the node
+#     node.get_logger().info("The training is finished, now the node is destroyed")
+#     node.destroy_node()
+#     rclpy.shutdown()
+
+# def optimize_ppo(trial):
+#     ## This method defines the range of hyperparams to search fo the best tuning
+#     return {
+#         'n_steps': trial.suggest_int('n_steps', 2048, 8192), # Default: 2048
+#         'gamma': trial.suggest_loguniform('gamma', 0.8, 0.9999), # Default: 0.99
+#         'learning_rate': trial.suggest_loguniform('learning_rate', 1e-6, 1e-3), # Default: 3e-4
+#         'clip_range': trial.suggest_uniform('clip_range', 0.1, 0.4), # Default: 0.02
+#         'gae_lambda': trial.suggest_uniform('gae_lambda', 0.8, 0.99), # Default: 0.95
+#         'ent_coef': trial.suggest_loguniform('ent_coef', 0.00000001, 0.1), # Default: 0.0
+#         'vf_coef': trial.suggest_uniform('vf_coef', 0, 1), # Default: 0.5
+#     }
+
+# def optimize_ppo_refinement(trial):
+#     ## This method defines a smaller range of hyperparams to search fo the best tuning
+#     return {
+#         'n_steps': trial.suggest_int('n_steps', 2048, 14336), # Default: 2048
+#         'gamma': trial.suggest_loguniform('gamma', 0.96, 0.9999), # Default: 0.99
+#         'learning_rate': trial.suggest_loguniform('learning_rate', 1e-5, 9e-4), # Default: 3e-4
+#         'clip_range': trial.suggest_uniform('clip_range', 0.15, 0.37), # Default: 0.02
+#         'gae_lambda': trial.suggest_uniform('gae_lambda', 0.94, 0.99), # Default: 0.95
+#         'ent_coef': trial.suggest_loguniform('ent_coef', 0.00000001, 0.00001), # Default: 0.0
+#         'vf_coef': trial.suggest_uniform('vf_coef', 0.55, 0.65), # Default: 0.5
+#     }
+
+# def optimize_agent(trial):
+#     ## This method is used to optimize the hyperparams for our problem
+#     try:
+#         # Create environment
+#         env_opt = gym.make('HospitalBotEnv-v0')
+#         # Setup dirs
+#         HOME_DIR = os.path.expanduser('~')
+#         PKG_DIR = 'ros2_ws/src/Hospitalbot-Path-Planning/hospital_robot_spawner'
+#         LOG_DIR = os.path.join(HOME_DIR, PKG_DIR, 'logs')
+#         SAVE_PATH = os.path.join(HOME_DIR, PKG_DIR, 'tuning', 'trial_{}'.format(trial.number))
+#         # Setup the parameters
+#         #model_params = optimize_ppo(trial)
+#         model_params = optimize_ppo_refinement(trial)
+#         # Setup the model
+        
+#         # model = PPO("MultiInputPolicy", env_opt, tensorboard_log=LOG_DIR, verbose=0, **model_params)
+#         model = A2C("MultiInputPolicy", env_opt, tensorboard_log=LOG_DIR, verbose=0, **model_params)
+#         model.learn(total_timesteps=150000)
+#         # Evaluate the model
+#         mean_reward, _ = evaluate_policy(model, env_opt, n_eval_episodes=20)
+#         # Close env and delete
+#         env_opt.close()
+#         del env_opt
+
+#         model.save(SAVE_PATH)
+
+#         return mean_reward
+
+#     except Exception as e:
+#         return -10000
+
+# if __name__ == "__main__":
+#     main()

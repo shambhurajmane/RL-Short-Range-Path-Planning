@@ -1,0 +1,53 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/prasanna/nav2_ws/install/nav2_smoother/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_controller/include/**",
+        "/home/prasanna/nav2_ws/install/dwb_plugins/include/**",
+        "/home/prasanna/nav2_ws/install/dwb_critics/include/**",
+        "/home/prasanna/nav2_ws/install/dwb_core/include/**",
+        "/home/prasanna/nav2_ws/install/nav_2d_utils/include/**",
+        "/home/prasanna/nav2_ws/install/dwb_msgs/include/**",
+        "/home/prasanna/nav2_ws/install/nav_2d_msgs/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_waypoint_follower/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_theta_star_planner/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_smac_planner/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_rotation_shim_controller/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_regulated_pure_pursuit_controller/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_planner/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_navfn_planner/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_constrained_smoother/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_bt_navigator/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_behaviors/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_core/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_collision_monitor/include/**",
+        "/home/prasanna/nav2_ws/install/costmap_queue/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_costmap_2d/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_voxel_grid/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_velocity_smoother/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_rviz_plugins/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_map_server/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_lifecycle_manager/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_behavior_tree/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_amcl/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_util/include/**",
+        "/home/prasanna/nav2_ws/install/nav2_msgs/include/**",
+        "/opt/ros/humble/include/**",
+        "/home/prasanna/ros2_ws/src/ROS2-Point-Cloud-Clustering-and-Segmentation-for-Autonomous-Behaviour/point_cloud_processing/include/**",
+        "/home/prasanna/ros2_ws/src/ROS2-Point-Cloud-Clustering-and-Segmentation-for-Autonomous-Behaviour/turtlebot3_gazebo/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
